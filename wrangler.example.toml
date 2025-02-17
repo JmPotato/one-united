@@ -1,0 +1,9 @@
+name = "one-united"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-02-15"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[observability.logs]
+enabled = true
