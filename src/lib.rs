@@ -3,7 +3,7 @@ mod error;
 mod router;
 
 use async_std::sync::RwLock;
-use http::header::AUTHORIZATION;
+use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use lazy_static::lazy_static;
 use serde_json::json;
 use worker::{
@@ -68,32 +68,36 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
         .get(AUTHORIZATION.as_str())?
         .unwrap_or_default();
     // Try to get the API key from the environment secret.
-    match env.secret(ONE_API_KEY_SECRET_NAME) {
-        Ok(secret) => {
-            // Extract the bearer token from the api key.
-            if api_key.trim() != format!("Bearer {}", secret.to_string()) {
-                return Ok(Response::error(
-                    json!({
-                      "error": {
+    if let Ok(secret) = env.secret(ONE_API_KEY_SECRET_NAME) {
+        // Extract the bearer token from the api key.
+        if api_key.trim() != format!("Bearer {}", secret) {
+            return build_error_response(
+                &json!({
+                    "error": {
                         "code": "AuthenticationError",
                         "message": "The API key in the request is missing or invalid.",
                         "type": "Unauthorized"
-                      }
-                    })
-                    .to_string(),
-                    401,
-                )?);
-            }
+                    }
+                }),
+                401,
+            );
         }
-        Err(_) => {}
     }
 
     WorkerRouter::new()
         .get_async("/config", get_config)
         .post_async("/config", save_config)
-        .post_async("/v1/chat/completions", proxy_chat_completions)
+        .post_async("/v1/chat/completions", route_chat_completions)
         .run(req, env)
         .await
+}
+
+fn build_error_response(json: &serde_json::Value, status: u16) -> worker::Result<Response> {
+    let mut headers = Headers::new();
+    headers
+        .set(CONTENT_TYPE.as_str(), "application/json")
+        .unwrap();
+    Ok(Response::error(json.to_string(), status)?.with_headers(headers))
 }
 
 async fn get_config(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
@@ -103,11 +107,16 @@ async fn get_config(_req: Request, ctx: RouteContext<()>) -> worker::Result<Resp
         .json::<Config>()
         .await?;
 
-    Ok(Response::from_json(&config)?)
+    Response::from_json(&config)
 }
 
 async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let new_config = req.json::<Config>().await?;
+    let new_config = match Config::build(&req.text().await?) {
+        Ok(config) => config,
+        Err(e) => {
+            return build_error_response(&json!({ "error": e.to_string() }), 500);
+        }
+    };
     ctx.kv(CONFIG_KV_NAMESPACE)?
         .put(CONFIG_KV_KEY, new_config.clone())?
         .execute()
@@ -122,44 +131,18 @@ async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<
     Response::empty()
 }
 
-async fn proxy_chat_completions(req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
+async fn route_chat_completions(req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
     let original_url = req.url()?;
     let (new_req, is_stream) = get_router(ctx).await?.route(req).await?;
-    let new_url = new_req.url()?;
+    let routed_url = new_req.url()?;
     let resp = Fetch::Request(new_req).send().await?;
     console_log!(
-        "finished routing from {} to {} with status {}",
+        "finished routing the {} request from {} to {} with status {}",
+        if is_stream { "stream" } else { "non-stream" },
         original_url,
-        new_url,
+        routed_url,
         resp.status_code()
     );
 
-    if is_stream {
-        process_stream_response(resp).await
-    } else {
-        process_non_stream_response(resp).await
-    }
-}
-
-async fn process_stream_response(mut resp: Response) -> worker::Result<Response> {
-    let headers = build_response_headers(&resp, true);
-    Ok(Response::from_stream(resp.stream()?)?.with_headers(headers))
-}
-
-fn build_response_headers(resp: &Response, is_stream: bool) -> Headers {
-    let mut headers = resp.headers().clone();
-    headers.set("Access-Control-Allow-Origin", "*").unwrap();
-    headers.set("X-Proxy-Engine", "worker-rs").unwrap();
-
-    if is_stream {
-        headers.set("Content-Type", "text/event-stream").unwrap();
-        headers.delete("Content-Length").unwrap();
-    }
-
-    headers
-}
-
-async fn process_non_stream_response(mut resp: Response) -> worker::Result<Response> {
-    let headers = build_response_headers(&resp, false);
-    Ok(Response::from_bytes(resp.bytes().await?)?.with_headers(headers))
+    Ok(resp)
 }

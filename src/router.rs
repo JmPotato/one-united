@@ -10,8 +10,8 @@ use worker::{console_log, wasm_bindgen, Request, RequestInit};
 use crate::config::{Config, Identifier, Model, Provider, Rule};
 use crate::error::Error;
 
-const STREAM_FIELD: &'static str = "stream";
-const MODEL_FIELD: &'static str = "model";
+const STREAM_FIELD: &str = "stream";
+const MODEL_FIELD: &str = "model";
 
 #[derive(Debug, Clone)]
 pub struct Router {
