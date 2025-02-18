@@ -122,7 +122,7 @@ curl -X POST https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config \
 To check if the configuration has been successfully applied, use:
 
 ```bash
-curl https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config
+curl -H "Authorization: Bearer $ONE_API_KEY" https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config
 ```
 
 Once configured, you can now send chat completions requests via the unified endpoint. For example:
