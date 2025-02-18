@@ -72,14 +72,17 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
         Ok(secret) => {
             // Extract the bearer token from the api key.
             if api_key.trim() != format!("Bearer {}", secret.to_string()) {
-                return Ok(Response::from_json(&json!({
-                  "error": {
-                    "code": "AuthenticationError",
-                    "message": "The API key or AK/SK in the request is missing or invalid.",
-                    "param": "",
-                    "type": "Unauthorized"
-                  }
-                }))?);
+                return Ok(Response::error(
+                    json!({
+                      "error": {
+                        "code": "AuthenticationError",
+                        "message": "The API key in the request is missing or invalid.",
+                        "type": "Unauthorized"
+                      }
+                    })
+                    .to_string(),
+                    401,
+                )?);
             }
         }
         Err(_) => {}
