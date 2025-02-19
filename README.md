@@ -72,57 +72,20 @@ npx wrangler secret put ONE_API_KEY
 
 ## Usage
 
-After deployment, you need to upload a configuration that defines your LLM providers and routing rules. Send a POST request to `/config` with your configuration. Replace placeholders with your actual provider details and API keys:
+After deployment, you need to upload a configuration that defines your LLM providers and routing rules. Send a POST request to `/config` with your configuration. Edit the `config.example.json` file with your actual provider details and API keys.
 
 ```bash
+mv config.example.json config.json && vim config.json
 curl -X POST https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ONE_API_KEY" \
-  -d '{
-    "rules": [
-        {
-            "model": "gpt-4o",
-            "providers": [
-                {
-                    "identifier": "openai-platform",
-                    "model": "gpt-4o"
-                },
-                {
-                    "identifier": "github-models",
-                    "model": "gpt-4o"
-                }
-            ]
-        }
-    ],
-    "providers": [
-        {
-            "name": "OpenAI",
-            "identifier": "openai-platform",
-            "endpoint": "https://api.openai.com",
-            "path": "/v1/chat/completions",
-            "api_key": "$YOUR_OPENAI_API_KEY",
-            "models": [
-                "gpt-4o"
-            ]
-        },
-        {
-            "name": "GitHub Models",
-            "identifier": "github-models",
-            "endpoint": "https://models.inference.ai.azure.com",
-            "path": "/chat/completions",
-            "api_key": "$YOUR_GITHUB_API_KEY",
-            "models": [
-                "gpt-4o"
-            ]
-        }
-    ]
-  }'
+  -d @config.json
 ```
 
 To check if the configuration has been successfully applied, use:
 
 ```bash
-curl -H "Authorization: Bearer $ONE_API_KEY" https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config
+curl -H "Authorization: Bearer $ONE_API_KEY" -s https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config
 ```
 
 Once configured, you can now send chat completions requests via the unified endpoint. For example:

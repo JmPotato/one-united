@@ -25,3 +25,4 @@ node_modules/
 .wrangler/
 wrangler.toml
 .dev.vars
+config.json
