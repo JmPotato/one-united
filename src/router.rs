@@ -1,26 +1,31 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use async_std::sync::RwLock;
 use http::header::AUTHORIZATION;
+use rand::Rng;
 use rand::{rng, seq::IndexedRandom};
 use serde_json::{json, Value};
 use url::Url;
 use wasm_bindgen::JsValue;
-use worker::{console_log, wasm_bindgen, Request, RequestInit};
+use worker::{console_log, wasm_bindgen, Date, Fetch, Request, RequestInit, Response};
 
-use crate::config::{Config, Identifier, Model, Provider, Rule};
+use crate::config::{Config, Identifier, Model, Provider, Rule, RuleProvider};
 use crate::error::Error;
 
 const STREAM_FIELD: &str = "stream";
 const MODEL_FIELD: &str = "model";
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Router {
     rules: HashMap<Model, Rule>,
     providers: HashMap<Identifier, Provider>,
+    // The latency of each provider in milliseconds.
+    latency: RwLock<HashMap<Identifier, u64>>,
 }
 
 impl Router {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config) -> Arc<Self> {
         let mut rules = HashMap::new();
         for rule in config.rules {
             rules.insert(rule.model.clone(), rule.clone());
@@ -31,12 +36,21 @@ impl Router {
             providers.insert(provider.identifier.clone(), provider.clone());
         }
 
-        Self { rules, providers }
+        Arc::new(Self {
+            rules,
+            providers,
+            latency: RwLock::new(HashMap::new()),
+        })
+    }
+
+    async fn update_latency(&self, identifier: &Identifier, latency: u64) {
+        let mut latency_guard = self.latency.write().await;
+        latency_guard.insert(identifier.clone(), latency);
     }
 
     /// Routes the request according to the rules configured, and returns
     /// the new modified request and whether it is a stream request.
-    pub async fn route(&self, req: Request) -> Result<(Request, bool), Error> {
+    pub async fn route(&self, req: Request) -> Result<Response, Error> {
         let mut original_req = req.clone()?;
         let request_body = original_req.json::<Value>().await?;
         // Retrieve some important information from the request body.
@@ -48,26 +62,71 @@ impl Router {
             .get(MODEL_FIELD)
             .and_then(|v| v.as_str())
             .unwrap_or("gpt-4o");
+
         // Find the rule for this model.
         let rule = self.get_rule(model)?;
-        // Randomly select a provider from the rule.
-        let rule_provider = rule
-            .providers
-            .choose(&mut rng())
-            .expect("no provider found");
-        let target_model = rule_provider.model.clone();
-        let provider = self.get_provider(&rule_provider.identifier)?;
-        // Build the new request.
+        // Pick up a provider from the rule providers.
+        let picked_rule_provider = self.pick_provider(rule).await?;
+        // Get the mapped target model from the provider.
+        let target_model = picked_rule_provider.model.clone();
+        // Get the provider through the identifier.
+        let provider = self.get_provider(&picked_rule_provider.identifier)?;
+
+        // Build the new request and send it to the provider endpoint.
         let new_req = Self::build_request(req, provider, &target_model).await?;
+        let (original_url, routed_url) = (original_req.url()?, new_req.url()?);
         console_log!(
             "routing the {} request for model {} from {} to {}",
             if is_stream { "stream" } else { "non-stream" },
             model,
-            original_req.url()?,
-            new_req.url()?
+            original_url,
+            routed_url
         );
+        let start = Date::now().as_millis();
+        let resp = Fetch::Request(new_req).send().await?;
+        let duration = Date::now().as_millis() - start;
+        console_log!(
+            "finished routing the {} request for model {} from {} to {} with status {} in {}ms",
+            if is_stream { "stream" } else { "non-stream" },
+            model,
+            original_url,
+            routed_url,
+            resp.status_code(),
+            duration
+        );
+        self.update_latency(&provider.identifier, duration).await;
 
-        Ok((new_req, is_stream))
+        Ok(resp)
+    }
+
+    /// Picks a provider from the rule.
+    async fn pick_provider(&self, rule: &Rule) -> Result<RuleProvider, Error> {
+        let mut providers = rule.providers.clone();
+        let latency_guard = self.latency.read().await;
+
+        // Sort providers by latency
+        providers.sort_by_key(|p| latency_guard.get(&p.identifier).unwrap_or(&u64::MIN));
+        console_log!("providers: {:?}; latency: {:?}", providers, latency_guard);
+
+        // Get the fastest provider
+        let fastest_provider = providers.first().ok_or_else(|| {
+            Error::RuleProviderNotFound("no providers available to pick".to_string())
+        })?;
+
+        drop(latency_guard);
+
+        let mut rng = rng();
+        // 20% chance to use a random provider for load balancing
+        if rng.random_bool(0.2) {
+            Ok(providers
+                .choose(&mut rng)
+                .ok_or_else(|| {
+                    Error::RuleProviderNotFound("no providers available to pick".to_string())
+                })?
+                .clone())
+        } else {
+            Ok(fastest_provider.clone())
+        }
     }
 
     async fn build_request(

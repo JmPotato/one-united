@@ -2,13 +2,14 @@ mod config;
 mod error;
 mod router;
 
+use std::sync::Arc;
+
 use async_std::sync::RwLock;
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use lazy_static::lazy_static;
 use serde_json::json;
 use worker::{
-    console_log, event, Context, Env, Fetch, Headers, Request, Response, RouteContext,
-    Router as WorkerRouter,
+    event, Context, Env, Headers, Request, Response, RouteContext, Router as WorkerRouter,
 };
 
 use crate::config::Config;
@@ -19,40 +20,36 @@ const ONE_API_KEY_SECRET_NAME: &str = "ONE_API_KEY";
 const CONFIG_KV_NAMESPACE: &str = "config";
 const CONFIG_KV_KEY: &str = "config";
 
-type GlobalRouter = RwLock<Option<Router>>;
+type GlobalRouter = RwLock<Option<Arc<Router>>>;
 
 lazy_static! {
     pub static ref ROUTER: GlobalRouter = GlobalRouter::new(None);
 }
 
-async fn get_router(ctx: RouteContext<()>) -> Result<Router, Error> {
-    {
-        let router_guard = ROUTER.read().await;
-        if router_guard.is_some() {
-            return Ok(router_guard.clone().unwrap());
-        }
+async fn get_router(ctx: RouteContext<()>) -> Result<Arc<Router>, Error> {
+    // First try to get existing router
+    if let Some(router) = ROUTER.read().await.as_ref() {
+        return Ok(router.clone());
     }
 
-    {
-        let config = ctx
-            .kv(CONFIG_KV_NAMESPACE)?
-            .get(CONFIG_KV_KEY)
-            .json::<Config>()
-            .await?;
-        if config.is_none() {
-            return Err(Error::NoConfigFoundInKV);
-        }
-        let mut router_write = ROUTER.write().await;
-        // Double-check in case the router was initialized in the meantime.
-        if router_write.is_some() {
-            return Ok(router_write.clone().unwrap());
-        }
-
-        let new_router = Router::new(config.unwrap());
-        *router_write = Some(new_router);
+    // Get config and create new router
+    let mut router_write = ROUTER.write().await;
+    // Double-check after acquiring write lock
+    if let Some(router) = router_write.as_ref() {
+        return Ok(router.clone());
     }
 
-    Ok(ROUTER.read().await.clone().unwrap())
+    let config = ctx
+        .kv(CONFIG_KV_NAMESPACE)?
+        .get(CONFIG_KV_KEY)
+        .json::<Config>()
+        .await?
+        .ok_or(Error::NoConfigFoundInKV)?;
+
+    let new_router = Router::new(config);
+    *router_write = Some(new_router.clone());
+
+    Ok(new_router)
 }
 
 #[event(start)]
@@ -125,6 +122,7 @@ async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<
     let new_router = Router::new(new_config);
     {
         let mut router_guard = ROUTER.write().await;
+        drop(router_guard.take());
         *router_guard = Some(new_router);
     }
 
@@ -132,17 +130,6 @@ async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<
 }
 
 async fn route_chat_completions(req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let original_url = req.url()?;
-    let (new_req, is_stream) = get_router(ctx).await?.route(req).await?;
-    let routed_url = new_req.url()?;
-    let resp = Fetch::Request(new_req).send().await?;
-    console_log!(
-        "finished routing the {} request from {} to {} with status {}",
-        if is_stream { "stream" } else { "non-stream" },
-        original_url,
-        routed_url,
-        resp.status_code()
-    );
-
-    Ok(resp)
+    let router = get_router(ctx).await?;
+    router.route(req).await.map_err(|e| e.into())
 }

@@ -8,10 +8,10 @@ A lightweight API gateway for large language models (LLMs) built on [Cloudflare 
 - ⭐ **Key Features:**
   - 🤖 Easily deploy your own LLM API gateway.
   - ☁️ Benefit from the Cloudflare infrastructure.
-  - 🔄 One unified endpoint for multiple LLM providers with an integrated load-balancing strategy.
+  - 🔄 One unified endpoint for multiple LLM providers with a latency-based load-balancing strategy.
   - 🔑 OpenAI-compatible API.
 - 🚧 **TODO:**
-  - [ ] Provide more comprehensive load balancing configurations (such as weight-based or performance-based routing).
+  - [ ] Provide more customizable load balancing configuration.
   - [ ] Intuitive front-end configuration management interface
 
 ## Deployment
