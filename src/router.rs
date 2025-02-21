@@ -15,13 +15,15 @@ use crate::error::Error;
 
 const STREAM_FIELD: &str = "stream";
 const MODEL_FIELD: &str = "model";
+const FALLBACK_MODEL: &str = "gpt-4o";
+const RANDOM_PROVIDER_CHANCE: f64 = 0.2;
 
 #[derive(Debug)]
 pub struct Router {
     rules: HashMap<Model, Rule>,
     providers: HashMap<Identifier, Provider>,
     // The latency of each provider in milliseconds.
-    latency: RwLock<HashMap<Identifier, u64>>,
+    latency: RwLock<HashMap<(Identifier, Model), u64>>,
 }
 
 impl Router {
@@ -43,9 +45,9 @@ impl Router {
         })
     }
 
-    async fn update_latency(&self, identifier: &Identifier, latency: u64) {
+    async fn update_latency(&self, identifier: &Identifier, model: &Model, latency: u64) {
         let mut latency_guard = self.latency.write().await;
-        latency_guard.insert(identifier.clone(), latency);
+        latency_guard.insert((identifier.clone(), model.clone()), latency);
     }
 
     /// Routes the request according to the rules configured, and returns
@@ -61,10 +63,11 @@ impl Router {
         let model = request_body
             .get(MODEL_FIELD)
             .and_then(|v| v.as_str())
-            .unwrap_or("gpt-4o");
+            .unwrap_or(FALLBACK_MODEL)
+            .to_string();
 
         // Find the rule for this model.
-        let rule = self.get_rule(model)?;
+        let rule = self.get_rule(&model)?;
         // Pick up a provider from the rule providers.
         let picked_rule_provider = self.pick_provider(rule).await?;
         // Get the mapped target model from the provider.
@@ -94,7 +97,16 @@ impl Router {
             resp.status_code(),
             duration
         );
-        self.update_latency(&provider.identifier, duration).await;
+        self.update_latency(
+            &provider.identifier,
+            &model,
+            if resp.status_code() == 200 {
+                duration
+            } else {
+                u64::MAX
+            },
+        )
+        .await;
 
         Ok(resp)
     }
@@ -105,7 +117,11 @@ impl Router {
         let latency_guard = self.latency.read().await;
 
         // Sort providers by latency
-        providers.sort_by_key(|p| latency_guard.get(&p.identifier).unwrap_or(&u64::MIN));
+        providers.sort_by_key(|p| {
+            latency_guard
+                .get(&(p.identifier.clone(), p.model.clone()))
+                .unwrap_or(&u64::MIN)
+        });
         console_log!("providers: {:?}; latency: {:?}", providers, latency_guard);
 
         // Get the fastest provider
@@ -117,7 +133,7 @@ impl Router {
 
         let mut rng = rng();
         // 20% chance to use a random provider for load balancing
-        if rng.random_bool(0.2) {
+        if rng.random_bool(RANDOM_PROVIDER_CHANCE) {
             Ok(providers
                 .choose(&mut rng)
                 .ok_or_else(|| {
@@ -147,7 +163,6 @@ impl Router {
             AUTHORIZATION.as_str(),
             &format!("Bearer {}", provider.api_key,),
         )?;
-        headers.delete("cf-connecting-ip")?;
 
         // Modify the request body.
         let mut body = req.json::<Value>().await?;
