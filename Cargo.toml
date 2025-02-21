@@ -3,6 +3,9 @@ name = "one-united"
 version = "0.1.0"
 edition = "2021"
 authors = ["JmPotato <ghzpotato@gmail.com>"]
+description = "A lightweight API gateway for large language models (LLMs) built on Cloudflare Workers, designed to simplify interactions with multiple LLM providers by exposing an one-united OpenAI-compatible endpoint."
+license = "MIT"
+repository = "https://github.com/JmPotato/one-united"
 
 [package.metadata.release]
 release = false
