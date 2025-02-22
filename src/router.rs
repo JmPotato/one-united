@@ -163,7 +163,8 @@ impl Router {
             AUTHORIZATION.as_str(),
             &format!("Bearer {}", provider.api_key,),
         )?;
-        // "X-Title" will be used by service like OpenRouter to identify the request.
+        // "HTTP-Referer" and "X-Title" will be used by service like OpenRouter to identify the request.
+        headers.set("HTTP-Referer", "https://github.com/JmPotato/one-united")?;
         headers.set("X-Title", "one-united")?;
 
         // Modify the request body.
