@@ -196,4 +196,8 @@ impl Router {
             .get(identifier)
             .ok_or(Error::ProviderNotFound(identifier.to_string()))
     }
+
+    pub fn get_models(&self) -> Vec<String> {
+        self.rules.keys().cloned().collect()
+    }
 }

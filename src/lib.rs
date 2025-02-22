@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_std::sync::RwLock;
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use lazy_static::lazy_static;
-use serde_json::json;
+use serde_json::{json, Value};
 use worker::{
     event, Context, Env, Headers, Request, Response, RouteContext, Router as WorkerRouter,
 };
@@ -84,6 +84,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
     WorkerRouter::new()
         .get_async("/config", get_config)
         .post_async("/config", save_config)
+        .get_async("/v1/models", get_models)
         .post_async("/v1/chat/completions", route_chat_completions)
         .run(req, env)
         .await
@@ -127,6 +128,29 @@ async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<
     }
 
     Response::empty()
+}
+
+async fn get_models(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
+    let router = get_router(ctx).await?;
+    let models = router.get_models();
+
+    // Transform into the same format as OpenAI's `/v1/models` API.
+    // Ref: https://platform.openai.com/docs/api-reference/models/list
+    let formatted_models: Vec<Value> = models
+        .into_iter()
+        .map(|model| {
+            json!({
+                "id": model,
+                "object": "model",
+                "owned_by": "system"
+            })
+        })
+        .collect();
+
+    Response::from_json(&json!({
+        "object": "list",
+        "data": formatted_models,
+    }))
 }
 
 async fn route_chat_completions(req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
