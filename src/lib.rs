@@ -5,12 +5,10 @@ mod router;
 use std::sync::Arc;
 
 use async_std::sync::RwLock;
-use http::header::{AUTHORIZATION, CONTENT_TYPE};
+use http::header::AUTHORIZATION;
 use lazy_static::lazy_static;
 use serde_json::{json, Value};
-use worker::{
-    event, Context, Env, Headers, Request, Response, RouteContext, Router as WorkerRouter,
-};
+use worker::{event, Context, Env, Request, Response, RouteContext, Router as WorkerRouter};
 
 use crate::config::Config;
 use crate::error::Error;
@@ -68,16 +66,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
     if let Ok(secret) = env.secret(ONE_API_KEY_SECRET_NAME) {
         // Extract the bearer token from the api key.
         if api_key.trim() != format!("Bearer {}", secret) {
-            return build_error_response(
-                &json!({
-                    "error": {
-                        "code": "AuthenticationError",
-                        "message": "The API key in the request is missing or invalid.",
-                        "type": "Unauthorized"
-                    }
-                }),
-                401,
-            );
+            return Error::Unauthorized.into();
         }
     }
 
@@ -88,14 +77,6 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
         .post_async("/v1/chat/completions", route_chat_completions)
         .run(req, env)
         .await
-}
-
-fn build_error_response(json: &serde_json::Value, status: u16) -> worker::Result<Response> {
-    let mut headers = Headers::new();
-    headers
-        .set(CONTENT_TYPE.as_str(), "application/json")
-        .unwrap();
-    Ok(Response::error(json.to_string(), status)?.with_headers(headers))
 }
 
 async fn get_config(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
@@ -109,12 +90,7 @@ async fn get_config(_req: Request, ctx: RouteContext<()>) -> worker::Result<Resp
 }
 
 async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let new_config = match Config::build(&req.text().await?) {
-        Ok(config) => config,
-        Err(e) => {
-            return build_error_response(&json!({ "error": e.to_string() }), 500);
-        }
-    };
+    let new_config = Config::build(&req.text().await?)?;
     ctx.kv(CONFIG_KV_NAMESPACE)?
         .put(CONFIG_KV_KEY, new_config.clone())?
         .execute()
@@ -131,8 +107,10 @@ async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<
 }
 
 async fn get_models(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let router = get_router(ctx).await?;
-    let models = router.get_models();
+    let models = match get_router(ctx).await {
+        Ok(router) => router.get_models(),
+        Err(e) => return e.into(),
+    };
 
     // Transform into the same format as OpenAI's `/v1/models` API.
     // Ref: https://platform.openai.com/docs/api-reference/models/list
@@ -154,6 +132,8 @@ async fn get_models(_req: Request, ctx: RouteContext<()>) -> worker::Result<Resp
 }
 
 async fn route_chat_completions(req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let router = get_router(ctx).await?;
-    router.route(req).await.map_err(|e| e.into())
+    match get_router(ctx).await {
+        Ok(router) => router.route(req).await.map_err(|e| e.into()),
+        Err(e) => e.into(),
+    }
 }
