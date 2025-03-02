@@ -79,27 +79,29 @@ impl Router {
         let new_req = Self::build_request(req, provider, &target_model).await?;
         let (original_url, routed_url) = (original_req.url()?, new_req.url()?);
         console_log!(
-            "routing the {} request for model {} from {} to {}",
+            "routing the {} request: {}@{}->{}@{}",
             if is_stream { "stream" } else { "non-stream" },
-            model,
             original_url,
-            routed_url
+            model,
+            routed_url,
+            target_model
         );
         let start = Date::now().as_millis();
         let resp = Fetch::Request(new_req).send().await?;
         let duration = Date::now().as_millis() - start;
         console_log!(
-            "finished routing the {} request for model {} from {} to {} with status {} in {}ms",
+            "finished routing the {} request: {}@{}->{}@{} with status {} in {}ms",
             if is_stream { "stream" } else { "non-stream" },
-            model,
             original_url,
+            model,
             routed_url,
+            target_model,
             resp.status_code(),
             duration
         );
         self.update_latency(
             &provider.identifier,
-            &model,
+            &target_model,
             if resp.status_code() == 200 {
                 duration
             } else {
@@ -200,5 +202,9 @@ impl Router {
 
     pub fn get_models(&self) -> Vec<String> {
         self.rules.keys().cloned().collect()
+    }
+
+    pub async fn get_stats(&self) -> HashMap<(Identifier, Model), u64> {
+        self.latency.read().await.clone()
     }
 }

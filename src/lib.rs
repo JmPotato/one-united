@@ -73,6 +73,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
     WorkerRouter::new()
         .get_async("/config", get_config)
         .post_async("/config", save_config)
+        .get_async("/stats", get_stats)
         .get_async("/v1/models", get_models)
         .post_async("/v1/chat/completions", route_chat_completions)
         .run(req, env)
@@ -104,6 +105,26 @@ async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<
     }
 
     Response::empty()
+}
+
+async fn get_stats(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
+    let stats = match get_router(ctx).await {
+        Ok(router) => router.get_stats().await,
+        Err(e) => return e.into(),
+    };
+
+    let formatted_stats: Vec<Value> = stats
+        .into_iter()
+        .map(|((identifier, model), latency)| {
+            json!({
+                "identifier": identifier,
+                "model": model,
+                "latency_ms": latency
+            })
+        })
+        .collect();
+
+    Response::from_json(&formatted_stats)
 }
 
 async fn get_models(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
