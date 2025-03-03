@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use worker_kv::ToRawKvValue;
 
 use crate::error::Error;
 
@@ -116,6 +117,17 @@ impl Config {
             }
         }
         Ok(())
+    }
+
+    pub fn hash(&self) -> String {
+        blake3::hash(
+            self.raw_kv_value()
+                .unwrap_or_default()
+                .as_string()
+                .unwrap_or_default()
+                .as_bytes(),
+        )
+        .to_string()
     }
 }
 

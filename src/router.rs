@@ -20,6 +20,8 @@ const RANDOM_PROVIDER_CHANCE: f64 = 0.2;
 
 #[derive(Debug)]
 pub struct Router {
+    // The hash of the config that is used to generate this router.
+    pub hash: String,
     rules: HashMap<Model, Rule>,
     providers: HashMap<Identifier, Provider>,
     // The latency of each provider in milliseconds.
@@ -27,7 +29,7 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new(config: Config) -> Arc<Self> {
+    pub fn new(config: Config, hash: String) -> Arc<Self> {
         let mut rules = HashMap::new();
         for rule in config.rules {
             rules.insert(rule.model.clone(), rule.clone());
@@ -39,6 +41,7 @@ impl Router {
         }
 
         Arc::new(Self {
+            hash,
             rules,
             providers,
             latency: RwLock::new(HashMap::new()),
@@ -215,7 +218,7 @@ impl Router {
         self.rules.keys().cloned().collect()
     }
 
-    pub async fn get_stats(&self) -> HashMap<(Identifier, Model), u64> {
+    pub async fn get_latency_stats(&self) -> HashMap<(Identifier, Model), u64> {
         self.latency.read().await.clone()
     }
 }

@@ -19,6 +19,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 async-std = "1.13.0"
+blake3 = "1.6.1"
 console_error_panic_hook = { version = "0.1.1" }
 futures = "0.3"
 getrandom = { version = "0.3", features = ["wasm_js"] }
