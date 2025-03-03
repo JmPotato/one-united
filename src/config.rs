@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
@@ -14,7 +16,7 @@ pub struct Rule {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RuleProvider {
     pub identifier: Identifier,
-    pub model: Model,
+    pub models: Vec<Model>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -47,7 +49,7 @@ impl Config {
 
     fn validate(&self) -> Result<(), Error> {
         // Check if the providers are unique.
-        let mut provider_identifiers = std::collections::HashMap::new();
+        let mut providers: HashMap<Identifier, Vec<Model>> = HashMap::new();
         for provider in &self.providers {
             // Check if the provider configuration is valid.
             if provider.identifier.is_empty() {
@@ -62,12 +64,12 @@ impl Config {
                 return Err(Error::ProviderInvalidModels(provider.identifier.clone()));
             }
             // Check if the provider identifier is unique.
-            if provider_identifiers.contains_key(&provider.identifier) {
+            if providers.contains_key(&provider.identifier) {
                 return Err(Error::ProviderIdentifierNotUnique(
                     provider.identifier.clone(),
                 ));
             }
-            provider_identifiers.insert(provider.identifier.clone(), provider.models.clone());
+            providers.insert(provider.identifier.clone(), provider.models.clone());
         }
         // Check if the rules are unique.
         let mut rule_models = std::collections::HashSet::new();
@@ -80,7 +82,7 @@ impl Config {
         for rule in &self.rules {
             // Check if the providers are valid.
             for rule_provider in &rule.providers {
-                if !provider_identifiers.contains_key(&rule_provider.identifier) {
+                if !providers.contains_key(&rule_provider.identifier) {
                     return Err(Error::RuleProviderNotFound(
                         rule_provider.identifier.clone(),
                     ));
@@ -88,17 +90,28 @@ impl Config {
             }
             // Check each provider in the rule to see if the model mapping is valid.
             for rule_provider in &rule.providers {
-                let models = provider_identifiers.get(&rule_provider.identifier);
-                if models.is_none() {
+                let provider_models = providers.get(&rule_provider.identifier);
+                if provider_models.is_none() {
                     return Err(Error::RuleProviderNotFound(
                         rule_provider.identifier.clone(),
                     ));
                 }
-                if !models.unwrap().contains(&rule_provider.model) {
-                    return Err(Error::RuleModelNotFound(
-                        rule_provider.model.clone(),
+
+                let provider_models = provider_models.unwrap();
+                // Check if the rule provider has at least one model
+                if rule_provider.models.is_empty() {
+                    return Err(Error::ProviderInvalidModels(
                         rule_provider.identifier.clone(),
                     ));
+                }
+                // Check if all models in the rule provider are available in the provider
+                for model in &rule_provider.models {
+                    if !provider_models.contains(model) {
+                        return Err(Error::RuleModelNotFound(
+                            model.clone(),
+                            rule_provider.identifier.clone(),
+                        ));
+                    }
                 }
             }
         }
@@ -120,15 +133,15 @@ mod tests {
       "providers": [
         {
           "identifier": "provider0",
-          "model": "model0-1"
+          "models": ["model0-1"]
         },
         {
           "identifier": "provider1",
-          "model": "model0-2"
+          "models": ["model0-2"]
         },
         {
           "identifier": "provider2",
-          "model": "model0-3"
+          "models": ["model0-3"]
         }
       ]
     }
@@ -178,22 +191,22 @@ mod tests {
 
         // Validate each rule provider.
         let expected_rule_providers = vec![
-            ("provider0", "model0-1"),
-            ("provider1", "model0-2"),
-            ("provider2", "model0-3"),
+            ("provider0", vec!["model0-1"]),
+            ("provider1", vec!["model0-2"]),
+            ("provider2", vec!["model0-3"]),
         ];
-        for (i, &(expected_identifier, expected_model)) in
+        for (i, (expected_identifier, expected_models)) in
             expected_rule_providers.iter().enumerate()
         {
             let rule_provider = &rule.providers[i];
             assert_eq!(
-                rule_provider.identifier, expected_identifier,
+                rule_provider.identifier, *expected_identifier,
                 "Unexpected identifier for rule provider at index {}",
                 i
             );
             assert_eq!(
-                rule_provider.model, expected_model,
-                "Unexpected model for rule provider at index {}",
+                rule_provider.models, *expected_models,
+                "Unexpected models for rule provider at index {}",
                 i
             );
         }
@@ -393,14 +406,14 @@ mod tests {
                     model: "ruleModel".to_string(),
                     providers: vec![RuleProvider {
                         identifier: "provider1".to_string(),
-                        model: "model1".to_string(),
+                        models: vec!["model1".to_string()],
                     }],
                 },
                 Rule {
                     model: "ruleModel".to_string(),
                     providers: vec![RuleProvider {
                         identifier: "provider1".to_string(),
-                        model: "model1".to_string(),
+                        models: vec!["model1".to_string()],
                     }],
                 },
             ],
@@ -428,7 +441,7 @@ mod tests {
                 model: "ruleModel".to_string(),
                 providers: vec![RuleProvider {
                     identifier: "nonexistent_provider".to_string(),
-                    model: "model1".to_string(),
+                    models: vec!["model1".to_string()],
                 }],
             }],
         };
@@ -455,7 +468,7 @@ mod tests {
                 model: "ruleModel".to_string(),
                 providers: vec![RuleProvider {
                     identifier: "provider1".to_string(),
-                    model: "nonexistent_model".to_string(),
+                    models: vec!["nonexistent_model".to_string()],
                 }],
             }],
         };

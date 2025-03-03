@@ -9,7 +9,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
-    Yaml(#[from] serde_json::Error),
+    Json(#[from] serde_json::Error),
 
     #[error(transparent)]
     Worker(#[from] worker::Error),

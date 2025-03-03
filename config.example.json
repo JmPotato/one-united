@@ -5,11 +5,15 @@
       "providers": [
         {
           "identifier": "openai-platform",
-          "model": "gpt-4o"
+          "models": [
+            "gpt-4o"
+          ]
         },
         {
           "identifier": "github-models",
-          "model": "gpt-4o"
+          "models": [
+            "gpt-4o"
+          ]
         }
       ]
     }
@@ -21,7 +25,9 @@
       "endpoint": "https://api.openai.com",
       "path": "/v1/chat/completions",
       "api_key": "$YOUR_OPENAI_API_KEY",
-      "models": ["gpt-4o"]
+      "models": [
+        "gpt-4o"
+      ]
     },
     {
       "name": "GitHub Models",
@@ -29,7 +35,9 @@
       "endpoint": "https://models.inference.ai.azure.com",
       "path": "/chat/completions",
       "api_key": "$YOUR_GITHUB_API_KEY",
-      "models": ["gpt-4o"]
+      "models": [
+        "gpt-4o"
+      ]
     }
   ]
 }

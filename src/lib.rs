@@ -91,7 +91,10 @@ async fn get_config(_req: Request, ctx: RouteContext<()>) -> worker::Result<Resp
 }
 
 async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let new_config = Config::build(&req.text().await?)?;
+    let new_config = match Config::build(&req.text().await?) {
+        Ok(config) => config,
+        Err(e) => return e.into(),
+    };
     ctx.kv(CONFIG_KV_NAMESPACE)?
         .put(CONFIG_KV_KEY, new_config.clone())?
         .execute()
@@ -113,7 +116,11 @@ async fn get_stats(_req: Request, ctx: RouteContext<()>) -> worker::Result<Respo
         Err(e) => return e.into(),
     };
 
-    let formatted_stats: Vec<Value> = stats
+    // Sort by latency.
+    let mut sorted_stats = stats.into_iter().collect::<Vec<_>>();
+    sorted_stats.sort_by_key(|((_, _), latency)| *latency);
+    // Format the stats.
+    let formatted_stats: Vec<Value> = sorted_stats
         .into_iter()
         .map(|((identifier, model), latency)| {
             json!({

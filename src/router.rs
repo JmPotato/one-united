@@ -10,7 +10,7 @@ use url::Url;
 use wasm_bindgen::JsValue;
 use worker::{console_log, wasm_bindgen, Date, Fetch, Request, RequestInit, Response};
 
-use crate::config::{Config, Identifier, Model, Provider, Rule, RuleProvider};
+use crate::config::{Config, Identifier, Model, Provider, Rule};
 use crate::error::Error;
 
 const STREAM_FIELD: &str = "stream";
@@ -66,34 +66,33 @@ impl Router {
             .unwrap_or(FALLBACK_MODEL)
             .to_string();
 
-        // Find the rule for this model.
+        // Get the rule for the model.
         let rule = self.get_rule(&model)?;
-        // Pick up a provider from the rule providers.
-        let picked_rule_provider = self.pick_provider(rule).await?;
-        // Get the mapped target model from the provider.
-        let target_model = picked_rule_provider.model.clone();
-        // Get the provider through the identifier.
-        let provider = self.get_provider(&picked_rule_provider.identifier)?;
-
-        // Build the new request and send it to the provider endpoint.
-        let new_req = Self::build_request(req, provider, &target_model).await?;
-        let (original_url, routed_url) = (original_req.url()?, new_req.url()?);
+        // Pick a (provider, model) pair from the rule.
+        let (provider_identifier, target_model) = self.pick_provider_model(rule).await?;
+        // Get the provider.
+        let provider = self.get_provider(&provider_identifier)?;
+        // Build the request.
+        let req = Self::build_request(req, provider, &target_model).await?;
+        let (original_url, routed_url) = (original_req.url()?, req.url()?);
         console_log!(
-            "routing the {} request: {}@{}->{}@{}",
+            "routing the {} request: {}@{}--[{}]->{}@{}",
             if is_stream { "stream" } else { "non-stream" },
             original_url,
             model,
+            provider_identifier,
             routed_url,
             target_model
         );
         let start = Date::now().as_millis();
-        let resp = Fetch::Request(new_req).send().await?;
+        let resp = Fetch::Request(req).send().await?;
         let duration = Date::now().as_millis() - start;
         console_log!(
-            "finished routing the {} request: {}@{}->{}@{} with status {} in {}ms",
+            "finished routing the {} request: {}@{}--[{}]->{}@{} with status {} in {}ms",
             if is_stream { "stream" } else { "non-stream" },
             original_url,
             model,
+            provider_identifier,
             routed_url,
             target_model,
             resp.status_code(),
@@ -114,37 +113,49 @@ impl Router {
     }
 
     /// Picks a provider from the rule.
-    async fn pick_provider(&self, rule: &Rule) -> Result<RuleProvider, Error> {
-        let mut providers = rule.providers.clone();
+    async fn pick_provider_model(&self, rule: &Rule) -> Result<(Identifier, Model), Error> {
         let latency_guard = self.latency.read().await;
 
-        // Sort providers by latency
-        providers.sort_by_key(|p| {
+        // Flatten the (provider, model) pairs into a single list.
+        let mut models: Vec<(Identifier, Model)> = Vec::new();
+        for provider in &rule.providers {
+            models.extend(
+                provider
+                    .models
+                    .iter()
+                    .map(|model| (provider.identifier.clone(), model.clone())),
+            );
+        }
+
+        // Sort the (provider, model) pairs by latency.
+        models.sort_by_key(|(identifier, model)| {
             latency_guard
-                .get(&(p.identifier.clone(), p.model.clone()))
+                .get(&(identifier.clone(), model.clone()))
                 .unwrap_or(&u64::MIN)
         });
-        console_log!("providers: {:?}; latency: {:?}", providers, latency_guard);
+        console_log!("{}->{:?}; latency: {:?}", rule.model, models, latency_guard);
 
-        // Get the fastest provider
-        let fastest_provider = providers.first().ok_or_else(|| {
+        // Get the fastest (provider, model) pair.
+        let fastest: &(Identifier, Model) = models.first().ok_or_else(|| {
             Error::RuleProviderNotFound("no providers available to pick".to_string())
         })?;
 
         drop(latency_guard);
 
         let mut rng = rng();
-        // 20% chance to use a random provider for load balancing
-        if rng.random_bool(RANDOM_PROVIDER_CHANCE) {
-            Ok(providers
+        // 20% chance to use a random provider for load balancing.
+        let picked = if rng.random_bool(RANDOM_PROVIDER_CHANCE) {
+            models
                 .choose(&mut rng)
                 .ok_or_else(|| {
                     Error::RuleProviderNotFound("no providers available to pick".to_string())
                 })?
-                .clone())
+                .clone()
         } else {
-            Ok(fastest_provider.clone())
-        }
+            fastest.clone()
+        };
+        console_log!("picked: {}->{:?}", rule.model, picked);
+        Ok(picked)
     }
 
     async fn build_request(
