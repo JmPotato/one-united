@@ -40,7 +40,7 @@ npx wrangler kv:namespace create config
 
 After running the command above, copy the provided `kv_namespaces` section and paste it into your `wrangler.toml` file. It should appear similar to:
 
-```bash
+```toml
 [[kv_namespaces]]
 binding = "config"
 id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
