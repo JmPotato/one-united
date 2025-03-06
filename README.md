@@ -101,4 +101,6 @@ curl https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/v1/chat/completions \
    }'
 ```
 
+You can use the `model@@provider` syntax to bypass the rules and send a request directly to a specified provider. For example, to request the GPT-4o mini from OpenRouter, use the following model name: `openai/gpt-4o-mini@@openrouter`. This will send the request directly to OpenRouter, bypassing the load balancing relay.
+
 For more details on how to use the API and customize your requests, please refer to the [OpenAI API documentation](https://beta.openai.com/docs/api-reference/introduction).
