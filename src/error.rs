@@ -1,20 +1,19 @@
 use http::header::CONTENT_TYPE;
 use serde_json::json;
-use wasm_bindgen::JsValue;
-use worker::{wasm_bindgen, Headers, Response};
+use worker::{Headers, Response};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error(transparent)]
+    #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error(transparent)]
+    #[error("Worker error: {0}")]
     Worker(#[from] worker::Error),
 
-    #[error(transparent)]
+    #[error("KV error: {0}")]
     Kv(#[from] worker_kv::KvError),
 
     #[error("The API key in the request is missing or invalid.")]
@@ -57,19 +56,20 @@ pub enum Error {
 impl Error {
     pub fn to_response(&self) -> (serde_json::Value, u16) {
         let status = match self {
-            Self::Unauthorized => 401,
-            Self::NoConfigFoundInKV => 404,
-            Self::ProviderNotFound(_) => 404,
-            Self::RuleNotFound(_) => 404,
-            Self::RuleProviderNotFound(_) => 404,
-            Self::RuleModelNotFound(_, _) => 404,
             Self::MissingField(_) => 400,
             Self::ProviderInvalidIdentifier(_) => 400,
             Self::ProviderInvalidEndpoint(_) => 400,
             Self::ProviderInvalidModels(_) => 400,
             Self::ProviderIdentifierNotUnique(_) => 400,
             Self::RuleModelNotUnique(_) => 400,
-            _ => 500, // Default to 500 for other errors
+            Self::Json(_) => 400,
+            Self::Unauthorized => 401,
+            Self::NoConfigFoundInKV => 404,
+            Self::ProviderNotFound(_) => 404,
+            Self::RuleNotFound(_) => 404,
+            Self::RuleProviderNotFound(_) => 404,
+            Self::RuleModelNotFound(_, _) => 404,
+            Self::Io(_) | Self::Worker(_) | Self::Kv(_) => 500, // Server errors
         };
 
         let error_type = match status {
@@ -88,12 +88,6 @@ impl Error {
         });
 
         (json, status)
-    }
-}
-
-impl From<Error> for worker::Error {
-    fn from(e: Error) -> Self {
-        worker::Error::Internal(JsValue::from_str(&e.to_string()))
     }
 }
 

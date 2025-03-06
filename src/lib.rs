@@ -1,66 +1,20 @@
 mod config;
 mod error;
+mod global;
 mod kv;
 mod router;
 
-use std::sync::Arc;
-
-use async_std::sync::RwLock;
+use global::regen_router;
 use http::header::AUTHORIZATION;
 use kv::{get_config_from_kv, save_config_to_kv};
-use lazy_static::lazy_static;
 use serde_json::{json, Value};
-use worker::{
-    console_log, event, Context, Env, Request, Response, RouteContext, Router as WorkerRouter,
-};
+use worker::{event, Context, Env, Request, Response, RouteContext, Router as WorkerRouter};
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::router::Router;
+use crate::global::get_router;
 
 const ONE_API_KEY_SECRET_NAME: &str = "ONE_API_KEY";
-
-type GlobalRouter = RwLock<Option<Arc<Router>>>;
-
-lazy_static! {
-    pub static ref ROUTER: GlobalRouter = GlobalRouter::new(None);
-}
-
-async fn get_router(ctx: RouteContext<()>) -> Result<Arc<Router>, Error> {
-    // Prepare the config and hash to validate the consistency later.
-    let config = get_config_from_kv(&ctx).await?;
-    let hash = config.hash();
-
-    // First try to get existing router.
-    if let Some(router) = ROUTER.read().await.as_ref() {
-        // Then check if the hash is the same with the config hash in KV.
-        if router.hash == hash {
-            return Ok(router.clone());
-        }
-    }
-
-    // Try to generate a new router with the latest config and hash.
-    let mut router_write = ROUTER.write().await;
-    // Double-check after acquiring write lock.
-    if let Some(router) = router_write.as_ref() {
-        if router.hash == hash {
-            return Ok(router.clone());
-        }
-    }
-    let old_router_hash = match router_write.take() {
-        Some(router) => router.hash.clone(),
-        None => "".to_string(),
-    };
-    console_log!(
-        "generating a new router with config hash {} -> {}",
-        old_router_hash,
-        hash
-    );
-    let new_router = Router::new(config, hash);
-    *router_write = Some(new_router.clone());
-
-    Ok(new_router)
-}
 
 #[event(start)]
 fn start() {
@@ -72,7 +26,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
     // Validate the API key from the AUTHORIZATION header.
     let api_key = req
         .headers()
-        .get(AUTHORIZATION.as_str())?
+        .get(AUTHORIZATION.as_str())
+        .unwrap_or_default()
         .unwrap_or_default();
     // Try to get the API key from the environment secret.
     if let Ok(secret) = env.secret(ONE_API_KEY_SECRET_NAME) {
@@ -102,54 +57,54 @@ async fn get_config(_req: Request, ctx: RouteContext<()>) -> worker::Result<Resp
 }
 
 async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let new_config = match Config::build(&req.text().await?) {
+    let req_text = match req.text().await {
+        Ok(text) => text,
+        Err(e) => return Error::from(e).into(),
+    };
+    let new_config = match Config::build(&req_text) {
         Ok(config) => config,
         Err(e) => return e.into(),
     };
-    save_config_to_kv(&ctx, new_config.clone()).await?;
-
-    let hash = new_config.hash();
-    console_log!("generating a new router with config hash {}", hash);
-    let new_router = Router::new(new_config, hash);
-    {
-        let mut router_guard = ROUTER.write().await;
-        drop(router_guard.take());
-        *router_guard = Some(new_router);
+    if let Err(e) = save_config_to_kv(&ctx, new_config.clone()).await {
+        return e.into();
     }
+
+    // Regenerate the router with the new config.
+    regen_router(new_config).await;
 
     Response::empty()
 }
 
 async fn get_stats(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let router = match get_router(ctx).await {
+    let router = match get_router(&ctx).await {
         Ok(router) => router,
         Err(e) => return e.into(),
     };
-    let latency_stats = router.get_latency_stats().await;
+    let stats = router.get_stats().await;
 
     // Sort by latency.
-    let mut sorted_stats = latency_stats.into_iter().collect::<Vec<_>>();
-    sorted_stats.sort_by_key(|((_, _), latency)| *latency);
-    // Format the stats.
-    let formatted_latency_stats: Vec<Value> = sorted_stats
+    let mut sorted_latency = stats.latency.into_iter().collect::<Vec<_>>();
+    sorted_latency.sort_by_key(|((_, _), latency)| *latency);
+    // Format the latency.
+    let formatted_latency: Vec<Value> = sorted_latency
         .into_iter()
         .map(|((identifier, model), latency)| {
             json!({
                 "identifier": identifier,
                 "model": model,
-                "latency_ms": latency
+                "ms": latency
             })
         })
         .collect();
 
     Response::from_json(&json!({
         "hash": router.hash,
-        "latency_stats": formatted_latency_stats,
+        "latency": formatted_latency,
     }))
 }
 
 async fn get_models(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let models = match get_router(ctx).await {
+    let models = match get_router(&ctx).await {
         Ok(router) => router.get_models(),
         Err(e) => return e.into(),
     };
@@ -174,8 +129,12 @@ async fn get_models(_req: Request, ctx: RouteContext<()>) -> worker::Result<Resp
 }
 
 async fn route_chat_completions(req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    match get_router(ctx).await {
-        Ok(router) => router.route(req).await.map_err(|e| e.into()),
+    let router = match get_router(&ctx).await {
+        Ok(router) => router,
+        Err(e) => return e.into(),
+    };
+    match router.route(req).await {
+        Ok(resp) => Ok(resp),
         Err(e) => e.into(),
     }
 }

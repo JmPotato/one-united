@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use async_std::sync::RwLock;
 use http::header::AUTHORIZATION;
+use rand::seq::SliceRandom;
 use rand::Rng;
 use rand::{rng, seq::IndexedRandom};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use url::Url;
 use wasm_bindgen::JsValue;
@@ -18,18 +20,24 @@ const MODEL_FIELD: &str = "model";
 const FALLBACK_MODEL: &str = "gpt-4o";
 const RANDOM_PROVIDER_CHANCE: f64 = 0.2;
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Stats {
+    // The latency of each provider in milliseconds.
+    pub latency: HashMap<(Identifier, Model), u32>,
+}
+
 #[derive(Debug)]
 pub struct Router {
     // The hash of the config that is used to generate this router.
     pub hash: String,
     rules: HashMap<Model, Rule>,
     providers: HashMap<Identifier, Provider>,
-    // The latency of each provider in milliseconds.
-    latency: RwLock<HashMap<(Identifier, Model), u64>>,
+    // Stats is used to store some stats meta during the router's lifetime.
+    stats: RwLock<Stats>,
 }
 
 impl Router {
-    pub fn new(config: Config, hash: String) -> Arc<Self> {
+    pub fn new(config: Config, hash: String, stats: Option<Stats>) -> Arc<Self> {
         let mut rules = HashMap::new();
         for rule in config.rules {
             rules.insert(rule.model.clone(), rule.clone());
@@ -44,13 +52,15 @@ impl Router {
             hash,
             rules,
             providers,
-            latency: RwLock::new(HashMap::new()),
+            stats: RwLock::new(stats.unwrap_or_default()),
         })
     }
 
-    async fn update_latency(&self, identifier: &Identifier, model: &Model, latency: u64) {
-        let mut latency_guard = self.latency.write().await;
-        latency_guard.insert((identifier.clone(), model.clone()), latency);
+    async fn update_latency(&self, identifier: &Identifier, model: &Model, latency: u32) {
+        let mut stats = self.stats.write().await;
+        stats
+            .latency
+            .insert((identifier.clone(), model.clone()), latency);
     }
 
     /// Routes the request according to the rules configured, and returns
@@ -63,16 +73,30 @@ impl Router {
             .get(STREAM_FIELD)
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let model = request_body
+        let mut model = request_body
             .get(MODEL_FIELD)
             .and_then(|v| v.as_str())
             .unwrap_or(FALLBACK_MODEL)
             .to_string();
 
-        // Get the rule for the model.
-        let rule = self.get_rule(&model)?;
-        // Pick a (provider, model) pair from the rule.
-        let (provider_identifier, target_model) = self.pick_provider_model(rule).await?;
+        let (provider_identifier, target_model) = match Self::get_raw_model(&model) {
+            Some((identifier, target_model)) => {
+                model = target_model.clone();
+                (identifier, target_model)
+            }
+            None => {
+                // Get the rule for the model.
+                let rule = self.get_rule(&model)?;
+                // Pick a (provider, model) pair from the rule.
+                self.pick_provider_model(rule).await?
+            }
+        };
+        console_log!(
+            "picked: {}->{}@@{}",
+            model,
+            target_model,
+            provider_identifier
+        );
         // Get the provider.
         let provider = self.get_provider(&provider_identifier)?;
         // Build the request.
@@ -105,9 +129,9 @@ impl Router {
             &provider.identifier,
             &target_model,
             if resp.status_code() == 200 {
-                duration
+                duration as u32
             } else {
-                u64::MAX
+                u32::MAX
             },
         )
         .await;
@@ -117,10 +141,10 @@ impl Router {
 
     /// Picks a provider from the rule.
     async fn pick_provider_model(&self, rule: &Rule) -> Result<(Identifier, Model), Error> {
-        let latency_guard = self.latency.read().await;
-
         // Flatten the (provider, model) pairs into a single list.
-        let mut models: Vec<(Identifier, Model)> = Vec::new();
+        let mut models: Vec<(Identifier, Model)> =
+            Vec::with_capacity(rule.providers.iter().map(|p| p.models.len()).sum());
+
         for provider in &rule.providers {
             models.extend(
                 provider
@@ -129,25 +153,24 @@ impl Router {
                     .map(|model| (provider.identifier.clone(), model.clone())),
             );
         }
-
-        // Sort the (provider, model) pairs by latency.
-        models.sort_by_key(|(identifier, model)| {
-            latency_guard
-                .get(&(identifier.clone(), model.clone()))
-                .unwrap_or(&u64::MIN)
-        });
-        console_log!("{}->{:?}; latency: {:?}", rule.model, models, latency_guard);
-
-        // Get the fastest (provider, model) pair.
-        let fastest: &(Identifier, Model) = models.first().ok_or_else(|| {
-            Error::RuleProviderNotFound("no providers available to pick".to_string())
-        })?;
-
-        drop(latency_guard);
-
+        // Shuffle the (provider, model) pairs before sorting to avoid always
+        // picking the same provider before latency stats are collected.
         let mut rng = rng();
+        models.shuffle(&mut rng);
+        // Sort the (provider, model) pairs by latency.
+        {
+            let stats = self.stats.read().await;
+            models.sort_by_key(|(identifier, model)| {
+                stats
+                    .latency
+                    .get(&(identifier.clone(), model.clone()))
+                    .unwrap_or(&u32::MIN)
+            });
+            console_log!("{}->{:?}; stats: {:?}", rule.model, models, stats);
+        }
+
         // 20% chance to use a random provider for load balancing.
-        let picked = if rng.random_bool(RANDOM_PROVIDER_CHANCE) {
+        Ok(if rng.random_bool(RANDOM_PROVIDER_CHANCE) {
             models
                 .choose(&mut rng)
                 .ok_or_else(|| {
@@ -155,10 +178,13 @@ impl Router {
                 })?
                 .clone()
         } else {
-            fastest.clone()
-        };
-        console_log!("picked: {}->{:?}", rule.model, picked);
-        Ok(picked)
+            models
+                .first()
+                .ok_or_else(|| {
+                    Error::RuleProviderNotFound("no providers available to pick".to_string())
+                })?
+                .clone()
+        })
     }
 
     async fn build_request(
@@ -202,6 +228,18 @@ impl Router {
         )?)
     }
 
+    /// If the request model has a pattern like `model@@provider`,
+    /// return the raw model name and its provider directly.
+    fn get_raw_model(model: &str) -> Option<(Identifier, Model)> {
+        if let Some(pos) = model.find("@@") {
+            let target_model = model[..pos].to_string();
+            let identifier = model[pos + 2..].to_string();
+            Some((identifier, target_model))
+        } else {
+            None
+        }
+    }
+
     fn get_rule(&self, model: &str) -> Result<&Rule, Error> {
         self.rules
             .get(model)
@@ -218,7 +256,52 @@ impl Router {
         self.rules.keys().cloned().collect()
     }
 
-    pub async fn get_latency_stats(&self) -> HashMap<(Identifier, Model), u64> {
-        self.latency.read().await.clone()
+    pub async fn get_stats(&self) -> Stats {
+        let stats = self.stats.read().await;
+        Stats {
+            latency: stats.latency.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_raw_model() {
+        // Test case 1: Valid format "model@@provider"
+        let result = Router::get_raw_model("gpt-4@@openai");
+        assert_eq!(result, Some(("openai".to_string(), "gpt-4".to_string())));
+
+        // Test case 2: Another valid format with different values
+        let result = Router::get_raw_model("claude-3-opus@@anthropic");
+        assert_eq!(
+            result,
+            Some(("anthropic".to_string(), "claude-3-opus".to_string()))
+        );
+
+        // Test case 3: No @@ delimiter
+        let result = Router::get_raw_model("gpt-4");
+        assert_eq!(result, None);
+
+        // Test case 4: Empty string
+        let result = Router::get_raw_model("");
+        assert_eq!(result, None);
+
+        // Test case 5: @@ at the beginning
+        let result = Router::get_raw_model("@@provider");
+        assert_eq!(result, Some(("provider".to_string(), "".to_string())));
+
+        // Test case 6: @@ at the end
+        let result = Router::get_raw_model("model@@");
+        assert_eq!(result, Some(("".to_string(), "model".to_string())));
+
+        // Test case 7: Multiple @@ delimiters (should only use the first one)
+        let result = Router::get_raw_model("model@@provider@@extra");
+        assert_eq!(
+            result,
+            Some(("provider@@extra".to_string(), "model".to_string()))
+        );
     }
 }
