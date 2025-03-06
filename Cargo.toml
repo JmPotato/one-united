@@ -21,9 +21,11 @@ crate-type = ["cdylib"]
 async-std = "1.13.0"
 blake3 = "1.6.1"
 console_error_panic_hook = { version = "0.1.1" }
+chrono = { version = "0.4.40", features = ["serde"] }
 futures = "0.3"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 http = "1.1"
+humantime = "2.1.0"
 lazy_static = "1.5"
 rand = "0.9"
 serde = { version = "1.0", features = ["derive"] }

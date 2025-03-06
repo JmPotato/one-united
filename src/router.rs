@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_std::sync::RwLock;
+use chrono::{DateTime, Utc};
 use http::header::AUTHORIZATION;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -30,6 +31,8 @@ pub struct Stats {
 pub struct Router {
     // The hash of the config that is used to generate this router.
     pub hash: String,
+    // The time when the stats is created.
+    pub created_at: DateTime<Utc>,
     rules: HashMap<Model, Rule>,
     providers: HashMap<Identifier, Provider>,
     // Stats is used to store some stats meta during the router's lifetime.
@@ -50,6 +53,7 @@ impl Router {
 
         Arc::new(Self {
             hash,
+            created_at: Utc::now(),
             rules,
             providers,
             stats: RwLock::new(stats.unwrap_or_default()),
@@ -257,10 +261,7 @@ impl Router {
     }
 
     pub async fn get_stats(&self) -> Stats {
-        let stats = self.stats.read().await;
-        Stats {
-            latency: stats.latency.clone(),
-        }
+        self.stats.read().await.clone()
     }
 }
 

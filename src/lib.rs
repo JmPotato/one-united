@@ -4,8 +4,10 @@ mod global;
 mod kv;
 mod router;
 
+use chrono::Utc;
 use global::regen_router;
 use http::header::AUTHORIZATION;
+use humantime::format_duration;
 use kv::{get_config_from_kv, save_config_to_kv};
 use serde_json::{json, Value};
 use worker::{event, Context, Env, Request, Response, RouteContext, Router as WorkerRouter};
@@ -99,6 +101,8 @@ async fn get_stats(_req: Request, ctx: RouteContext<()>) -> worker::Result<Respo
 
     Response::from_json(&json!({
         "hash": router.hash,
+        "created_at": router.created_at,
+        "lifetime": format_duration(Utc::now().signed_duration_since(router.created_at).to_std().unwrap_or_default()).to_string(),
         "latency": formatted_latency,
     }))
 }
