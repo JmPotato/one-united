@@ -72,20 +72,24 @@ npx wrangler secret put ONE_API_KEY
 
 ## Usage
 
-After deployment, you need to upload a configuration that defines your LLM providers and routing rules. Send a POST request to `/config` with your configuration. Edit the `config.example.json` file with your actual provider details and API keys.
+After deployment, you need to upload a configuration that defines your LLM providers and routing rules. Send a POST request to `/config` with your configuration. Edit the `config.example.yaml` or `config.example.json` file as your taste with the actual provider details and API keys.
 
 ```bash
-mv config.example.json config.json && vim config.json
+mv config.example.yaml config.yaml && vim config.yaml
 curl -X POST https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/yaml" \
   -H "Authorization: Bearer $ONE_API_KEY" \
-  -d @config.json
+  --data-binary @config.yaml
 ```
+
+Notice that the `Content-Type` header should be set correctly to indicate the format of the request body. And `--data-binary` is necessary for YAML files so that the line breaks are preserved.
 
 To check if the configuration has been successfully applied, use:
 
 ```bash
-curl -H "Authorization: Bearer $ONE_API_KEY" -s https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config
+curl -s https://<YOUR_WORKER>.<YOUR_SUBDOMAIN>.workers.dev/config \
+  -H "Authorization: Bearer $ONE_API_KEY" \
+  -H "Accept: application/yaml"
 ```
 
 Once configured, you can now send chat completions requests via the unified endpoint. For example:

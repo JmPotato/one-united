@@ -26,3 +26,4 @@ node_modules/
 wrangler.toml
 .dev.vars
 config.json
+config.yaml

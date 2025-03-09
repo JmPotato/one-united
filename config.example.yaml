@@ -1,0 +1,24 @@
+rules:
+  - model: gpt-4o
+    providers:
+      - identifier: openai-platform
+        models:
+          - gpt-4o
+      - identifier: github-models
+        models:
+          - gpt-4o
+providers:
+  - name: OpenAI
+    identifier: openai-platform
+    endpoint: https://api.openai.com
+    path: /v1/chat/completions
+    api_key: $YOUR_OPENAI_API_KEY
+    models:
+      - gpt-4o
+  - name: GitHub Models
+    identifier: github-models
+    endpoint: https://models.inference.ai.azure.com
+    path: /chat/completions
+    api_key: $YOUR_GITHUB_API_KEY
+    models:
+      - gpt-4o

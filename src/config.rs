@@ -42,8 +42,14 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn build(data: &str) -> Result<Self, Error> {
+    pub fn build_from_json(data: &str) -> Result<Self, Error> {
         let config: Config = serde_json::from_str(data)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn build_from_yaml(data: &str) -> Result<Self, Error> {
+        let config: Config = serde_yaml::from_str(data)?;
         config.validate()?;
         Ok(config)
     }
@@ -190,7 +196,7 @@ mod tests {
   ]
 }
 "#;
-        let config = Config::build(data).expect("Failed to build valid config");
+        let config = Config::build_from_json(data).expect("Failed to build valid config");
 
         // Validate the number of rules and providers.
         assert_eq!(config.rules.len(), 1, "Expected exactly one rule");

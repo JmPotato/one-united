@@ -10,6 +10,9 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("YAML error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
+
     #[error("Worker error: {0}")]
     Worker(#[from] worker::Error),
 
@@ -62,7 +65,7 @@ impl Error {
             Self::ProviderInvalidModels(_) => 400,
             Self::ProviderIdentifierNotUnique(_) => 400,
             Self::RuleModelNotUnique(_) => 400,
-            Self::Json(_) => 400,
+            Self::Json(_) | Self::Yaml(_) => 400,
             Self::Unauthorized => 401,
             Self::NoConfigFoundInKV => 404,
             Self::ProviderNotFound(_) => 404,

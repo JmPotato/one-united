@@ -6,7 +6,7 @@ mod router;
 
 use chrono::Utc;
 use global::regen_router;
-use http::header::AUTHORIZATION;
+use http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use humantime::format_duration;
 use kv::{get_config_from_kv, save_config_to_kv};
 use serde_json::{json, Value};
@@ -49,21 +49,47 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> worker::Result<Response
         .await
 }
 
-async fn get_config(_req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
+async fn get_config(req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
+    // Get the config from the KV store.
     let config = match get_config_from_kv(&ctx).await {
         Ok(config) => config,
         Err(e) => return e.into(),
     };
 
-    Response::from_json(&config)
+    // Return the config in the requested format.
+    match req
+        .headers()
+        .get(ACCEPT.as_str())
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .as_str()
+    {
+        "application/yaml" => {
+            // Convert the config to YAML.
+            let yaml = serde_yaml::to_string(&config).unwrap_or_default();
+            Response::from_bytes(yaml.as_bytes().to_vec())
+        }
+        _ => Response::from_json(&config),
+    }
 }
 
 async fn save_config(mut req: Request, ctx: RouteContext<()>) -> worker::Result<Response> {
-    let req_text = match req.text().await {
-        Ok(text) => text,
+    let content = match req.bytes().await {
+        Ok(bytes) => String::from_utf8(bytes).unwrap_or_default(),
         Err(e) => return Error::from(e).into(),
     };
-    let new_config = match Config::build(&req_text) {
+    // Check the header to determine the format of the request body.
+    let new_config = match req
+        .headers()
+        .get(CONTENT_TYPE.as_str())
+        .unwrap_or_default()
+        .unwrap_or_default()
+        .as_str()
+    {
+        "application/yaml" => Config::build_from_yaml(&content),
+        _ => Config::build_from_json(&content),
+    };
+    let new_config = match new_config {
         Ok(config) => config,
         Err(e) => return e.into(),
     };
