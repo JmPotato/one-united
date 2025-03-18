@@ -1,5 +1,7 @@
 # one-united
 
+**Note: recommand the TypeScript version [JmPotato/one-united-ts](https://github.com/JmPotato/one-united-ts) for better deployment experience.**
+
 A lightweight API gateway for large language models (LLMs) built on [Cloudflare Workers](https://workers.cloudflare.com), designed to simplify interactions with multiple LLM providers by exposing an one-united OpenAI-compatible endpoint.
 
 ## Overview
